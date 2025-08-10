@@ -191,3 +191,19 @@ NEXT_PUBLIC_SOCKET_URL=https://domainmu
 
 Ulangi script untuk overwrite konfigurasi.
 
+## One-Shot Setup (Interaktif)
+Setelah clone repo di server produksi:
+```
+chmod +x ./setup-webterminal
+./setup-webterminal
+```
+Script akan:
+1. Tanya domain (opsional), port, username, password
+2. Generate bcrypt hash (fallback ke plain jika gagal)
+3. Buat `.env` aman (chmod 600)
+4. Install dependencies + build
+5. (Opsional) start via pm2
+6. (Opsional) wizard Nginx + SSL
+
+Ulangi script untuk re-konfigurasi (backup `.env` lama otomatis).
+

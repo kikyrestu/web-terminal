@@ -1,0 +1,128 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+echo "=== Web Terminal One-Shot Setup ==="
+
+if ! command -v node >/dev/null 2>&1; then
+  echo "[ERROR] Node.js belum terinstall. Install Node.js 18+ dulu." >&2
+  exit 1
+fi
+
+if ! command -v npm >/dev/null 2>&1; then
+  echo "[ERROR] npm tidak ditemukan." >&2
+  exit 1
+fi
+
+read -rp "Domain / Hostname (misal: terminal.example.com) [enter untuk skip]: " DOMAIN
+read -rp "Port aplikasi (default 3001): " PORT
+PORT=${PORT:-3001}
+read -rp "Username admin (default admin): " ADMIN_USER
+ADMIN_USER=${ADMIN_USER:-admin}
+
+while true; do
+  read -srp "Password admin: " ADMIN_PASS; echo
+  read -srp "Ulangi password: " ADMIN_PASS2; echo
+  [[ "$ADMIN_PASS" == "$ADMIN_PASS2" ]] && [[ -n "$ADMIN_PASS" ]] && break
+  echo "[WARN] Password tidak cocok / kosong. Ulangi."
+done
+
+echo "[INFO] Generate bcrypt hash..."
+set +e
+HASH=$(node -e "import('bcryptjs').then(m=>{const b=m.default||m; b.hash(process.argv[1],10).then(h=>console.log(h))})" "$ADMIN_PASS")
+STATUS=$?
+set -e
+if [[ $STATUS -ne 0 || -z "$HASH" ]]; then
+  echo "[WARN] Gagal generate hash. Pakai plain password sementara (tidak aman)."
+  USE_PLAIN=1
+else
+  USE_PLAIN=0
+fi
+
+ENV_FILE=.env
+if [[ -f $ENV_FILE ]]; then
+  echo "[INFO] Backup .env lama ke .env.bak.$(date +%s)"
+  cp "$ENV_FILE" ".env.bak.$(date +%s)"
+fi
+
+echo "[INFO] Tulis konfigurasi .env"
+{
+  echo "NODE_ENV=production"
+  echo "PORT=$PORT"
+  echo "HOST=0.0.0.0"
+  echo "AUTH_USER=$ADMIN_USER"
+  if [[ $USE_PLAIN -eq 0 ]]; then
+    echo "AUTH_PASS_HASH=$HASH"
+  else
+    echo "AUTH_PASS_PLAIN=$ADMIN_PASS"
+  fi
+  if [[ -n "$DOMAIN" ]]; then
+    echo "ALLOWED_ORIGIN=https://$DOMAIN"
+    echo "NEXT_PUBLIC_SOCKET_URL=https://$DOMAIN"
+  else
+    echo "ALLOWED_ORIGIN=*"
+  fi
+  echo "TERMINAL_HISTORY_UNLIMITED=1"
+  echo "TERMINAL_MEMORY_BUFFER_MAX=10485760"
+} > "$ENV_FILE"
+
+chmod 600 "$ENV_FILE" || true
+echo "[OK] .env dibuat."
+
+echo "[INFO] Install dependencies (npm install --production)"
+npm install --production
+
+echo "[INFO] Build Next.js (npm run build)"
+npm run build
+
+read -rp "Start app sekarang dengan pm2? (Y/n) " START_PM2
+START_PM2=${START_PM2:-Y}
+if [[ $START_PM2 =~ ^[Yy] ]]; then
+  if ! command -v pm2 >/dev/null 2>&1; then
+    echo "[INFO] pm2 belum ada. Install global? (Y/n)"
+    read -r INSTALL_PM2
+    INSTALL_PM2=${INSTALL_PM2:-Y}
+    if [[ $INSTALL_PM2 =~ ^[Yy] ]]; then
+      if [[ $EUID -ne 0 ]]; then
+        echo "[INFO] Memerlukan sudo untuk npm i -g pm2"
+        sudo npm install -g pm2
+      else
+        npm install -g pm2
+      fi
+    else
+      echo "[INFO] Skip pm2 install."
+    fi
+  fi
+  if command -v pm2 >/dev/null 2>&1; then
+    echo "[INFO] Menjalankan pm2 start server.js --name web-terminal"
+    NODE_ENV=production pm2 start server.js --name web-terminal --update-env
+    pm2 save || true
+  else
+    echo "[WARN] pm2 tidak tersedia, jalankan manual: NODE_ENV=production node server.js"
+  fi
+fi
+
+read -rp "Setup Nginx reverse proxy sekarang? (Y/n) " SETUP_NGX
+SETUP_NGX=${SETUP_NGX:-Y}
+if [[ $SETUP_NGX =~ ^[Yy] ]]; then
+  if [[ $EUID -ne 0 ]]; then
+    echo "[WARN] Harus root untuk otomatis Nginx. Jalankan ulang dengan sudo atau jalankan manual:"
+    echo "sudo bash scripts/nginx-proxy-setup.sh"
+  else
+    if [[ -n "$DOMAIN" ]]; then
+      echo "[INFO] Panggil script Nginx (domain akan diminta lagi)."
+    fi
+    bash scripts/nginx-proxy-setup.sh || echo "[WARN] Setup Nginx gagal / dibatalkan."
+  fi
+fi
+
+echo "\n=== Ringkasan ==="
+echo "Port: $PORT"
+[[ -n "$DOMAIN" ]] && echo "Domain: $DOMAIN" || echo "Domain: (tidak diset)"
+echo "User: $ADMIN_USER"
+echo "Password: (disembunyikan)"
+echo "Auth memakai: $([[ $USE_PLAIN -eq 0 ]] && echo 'HASH' || echo 'PLAIN (ubah segera)')"
+echo "File .env:"
+grep -v 'PASS_' .env | sed 's/^/  /'
+
+echo "\nAkses setelah start: http://${DOMAIN:-localhost}:${PORT} (pakai https://$DOMAIN jika reverse proxy + SSL)."
+echo "Done."
