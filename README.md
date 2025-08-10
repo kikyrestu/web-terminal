@@ -166,6 +166,7 @@ jobs:
 NEXT_PUBLIC_FORCE_SHARED_SESSION=1          # Global single PTY (opsional)
 NEXT_PUBLIC_SHARED_SESSION_ID=main-session  # Nama session global
 NEXT_PUBLIC_DISABLE_LOCAL_CACHE=1           # Matikan cache localStorage
+NEXT_PUBLIC_SOCKET_URL=https://domainkamu.com  # Override base URL socket kalau beda port / domain
 ```
 
 Pastikan untuk mengganti password/hash default sebelum publish publik.

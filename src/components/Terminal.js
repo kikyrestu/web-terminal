@@ -40,11 +40,14 @@ export default function Terminal({ sessionId: externalSessionId, zen=false }) {
         setSessionId(id);
       }
     }
-    const s = io({
+    // Allow explicit socket base URL override (useful when app served via reverse proxy / different port)
+    const socketBase = process.env.NEXT_PUBLIC_SOCKET_URL || undefined; // undefined lets socket.io use window.location.origin
+    const s = io(socketBase, {
       path: '/socket.io',
       transports: ['websocket','polling'],
       reconnectionAttempts: 5,
-      reconnectionDelay: 1000
+      reconnectionDelay: 1000,
+      withCredentials: true
     });
     s.on('connect', () => setIsConnected(true));
     s.on('disconnect', () => setIsConnected(false));
