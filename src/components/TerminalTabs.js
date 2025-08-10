@@ -7,8 +7,20 @@ function genSessionId(idx){
 }
 
 export default function TerminalTabs(){
-  const forceShared = process.env.NEXT_PUBLIC_FORCE_SHARED_SESSION === '1';
+  const envForceShared = process.env.NEXT_PUBLIC_FORCE_SHARED_SESSION === '1';
   const sharedId = process.env.NEXT_PUBLIC_SHARED_SESSION_ID || 'main-session';
+  // Allow runtime override via query param ?shared=0 or ?shared=1 (useful saat debug)
+  const [forceShared,setForceShared] = useState(envForceShared);
+  useEffect(()=>{
+    try {
+      const sp = new URLSearchParams(window.location.search);
+      if(sp.has('shared')){
+        const v = sp.get('shared');
+        if(v === '0') setForceShared(false); else if(v === '1') setForceShared(true);
+      }
+    } catch {}
+  },[]);
+  useEffect(()=>{ console.log('[TerminalTabs] forceShared=', forceShared); },[forceShared]);
 
   const [tabs,setTabs] = useState(()=>{
     if(forceShared){
@@ -57,23 +69,23 @@ export default function TerminalTabs(){
 
   return (
     <div className="flex flex-col h-screen w-full bg-black">
-      <div className="flex items-stretch bg-gray-900 border-b border-gray-800 overflow-x-auto">
+      <div className="flex items-stretch bg-gray-900 border-b border-gray-800 overflow-x-auto relative">
+        {!forceShared && (
+          <button onClick={addTab} title="Tambah tab (Ctrl+Shift+T)" className="px-3 py-1 text-xs font-mono text-gray-300 hover:text-white border-r border-gray-800 sticky left-0 bg-gray-900">+ New</button>
+        )}
         {tabs.map((tab,i)=>{
           const activeTab = i===active;
           return (
             <div key={tab.id} className={`flex items-center px-3 py-1 text-xs font-mono cursor-pointer select-none border-r border-gray-800 ${activeTab? 'bg-black text-green-400' : 'text-gray-400 hover:text-white'}`} onClick={()=>setActive(i)} onDoubleClick={()=>renameTab(i)}>
-              <span className="mr-2">{tab.title}</span>
+              <span className="mr-2 whitespace-nowrap">{tab.title}</span>
               {!forceShared && (
-                <button onClick={(e)=>{e.stopPropagation(); closeTab(i);}} className="text-gray-500 hover:text-red-400 ml-auto">×</button>
+                <button aria-label="Close tab" onClick={(e)=>{e.stopPropagation(); closeTab(i);}} className="text-gray-500 hover:text-red-400 ml-auto">×</button>
               )}
             </div>
           );
         })}
-        {!forceShared && (
-          <button onClick={addTab} className="px-3 py-1 text-xs font-mono text-gray-400 hover:text-white">+ New</button>
-        )}
         {forceShared && (
-          <div className="ml-auto pr-4 py-1 text-[10px] text-gray-500 font-mono">Shared session mode aktif (multi-tab dinonaktifkan)</div>
+          <div className="ml-auto pr-4 py-1 text-[10px] text-gray-500 font-mono whitespace-nowrap">Shared session mode aktif (multi-tab off) | Tambah tab? hapus env NEXT_PUBLIC_FORCE_SHARED_SESSION atau pakai ?shared=0</div>
         )}
       </div>
       <div className="flex-1 min-h-0">
