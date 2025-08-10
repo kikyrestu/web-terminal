@@ -14,8 +14,12 @@ import path from 'path';
         if (eq === -1) return;
         const key = line.slice(0, eq).trim();
         if (!key) return;
-        const val = line.slice(eq + 1).trim();
-        if (process.env[key] === undefined) {
+        let val = line.slice(eq + 1).trim();
+        // Strip optional wrapping quotes
+        if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
+          val = val.slice(1, -1);
+        }
+        if (process.env[key] === undefined || process.env[key] === '') {
           process.env[key] = val;
         }
       });
