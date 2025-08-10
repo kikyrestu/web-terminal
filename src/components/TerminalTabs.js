@@ -6,23 +6,22 @@ function genSessionId(idx){
   return `tab-${idx}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2,6)}`;
 }
 
-const LS_KEY = 'terminalMultiTabs:v1';
-
-function loadSaved(){
-  try {
-    const raw = localStorage.getItem(LS_KEY);
-    if(!raw) return null;
-    const parsed = JSON.parse(raw);
-    if(!parsed || !Array.isArray(parsed.tabs) || parsed.tabs.length === 0) return null;
-    // sanitize
-    const tabs = parsed.tabs.filter(t=> t && typeof t.id==='string' && t.id.trim() && typeof t.title==='string');
-    if(!tabs.length) return null;
-    return { tabs, active: typeof parsed.active === 'number' && parsed.active < tabs.length ? parsed.active : 0 };
-  } catch { return null; }
+async function fetchTabs(){
+  const res = await fetch('/api/tabs',{ cache:'no-store' });
+  if(!res.ok) throw new Error('Failed fetch tabs');
+  const data = await res.json();
+  return data.tabs || [];
 }
-
-function saveTabs(tabs, active){
-  try { localStorage.setItem(LS_KEY, JSON.stringify({ tabs, active })); } catch {}
+async function createTab(title){
+  const res = await fetch('/api/tabs',{ method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ action:'create', title }) });
+  if(!res.ok) throw new Error('Failed create tab');
+  return (await res.json()).tab;
+}
+async function renameTabServer(id,title){
+  await fetch('/api/tabs',{ method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ action:'rename', id, title }) });
+}
+async function deleteTabServer(id){
+  await fetch(`/api/tabs?id=${encodeURIComponent(id)}`,{ method:'DELETE' });
 }
 
 export default function TerminalTabs(){
@@ -42,26 +41,9 @@ export default function TerminalTabs(){
   useEffect(()=>{ console.log('[TerminalTabs] forceShared=', forceShared); },[forceShared]);
 
   const firstLoadRef = useRef(true);
-  const [tabs,setTabs] = useState(()=>{
-    if(forceShared){
-      return [{ id: sharedId, title: 'Shared Session', shared:true }];
-    }
-    if(typeof window !== 'undefined'){
-      const saved = loadSaved();
-      if(saved){
-        return saved.tabs;
-      }
-    }
-    return [{ id: genSessionId(1), title: 'Tab 1' }];
-  });
-  const [active,setActive] = useState(()=>{
-    if(forceShared) return 0;
-    if(typeof window !== 'undefined'){
-      const saved = loadSaved();
-      if(saved) return saved.active;
-    }
-    return 0;
-  });
+  const [tabs,setTabs] = useState(()=> forceShared ? [{ id: sharedId, title: 'Shared Session', shared:true }] : []);
+  const [active,setActive] = useState(0);
+  const [loading,setLoading] = useState(!forceShared);
 
   // Keyboard shortcuts (avoid browser reserved combos):
   //  Alt+T  -> new tab
@@ -88,20 +70,21 @@ export default function TerminalTabs(){
     return ()=> window.removeEventListener('keydown', handler);
   },[active, forceShared, tabs, addTab, closeTab]);
 
-  const addTab = useCallback(()=>{
-    setTabs(t=>{
-      const idx = t.length + 1;
-      const newTabs = [...t, { id: genSessionId(idx), title: `Tab ${idx}` }];
-      // active update after setTabs using functional update below
-      setActive(newTabs.length -1);
-      return newTabs;
-    });
-  },[]);
+  const addTab = useCallback(async ()=>{
+    try {
+      const tab = await createTab();
+      setTabs(t=>[...t, tab]);
+      setActive(a=>tabs.length); // new last index
+    } catch(e){ console.error(e); }
+  },[tabs.length]);
 
-  const closeTab = useCallback((idx)=>{
+  const closeTab = useCallback(async (idx)=>{
+    setTabs(t=>{ if(t.length===1) return t; return t; }); // optimistic guard
+    const target = tabs[idx];
+    if(!target || tabs.length===1) return;
+    try { await deleteTabServer(target.id); } catch(e){ console.error(e); }
     setTabs(t=>{
-      if(t.length === 1) return t; // keep at least one
-      const newTabs = [...t.slice(0,idx), ...t.slice(idx+1)];
+      const newTabs = t.filter((_,i)=>i!==idx);
       setActive(a=>{
         if(a === idx) return Math.max(0, idx -1);
         if(a > idx) return a -1;
@@ -110,38 +93,48 @@ export default function TerminalTabs(){
       });
       return newTabs;
     });
-  },[]);
+  },[tabs]);
 
-  const renameTab = useCallback((idx)=>{
+  const renameTab = useCallback(async (idx)=>{
     const current = tabs[idx];
     if(!current) return;
     const label = prompt('Tab name:', current.title);
     if(label && label.trim()){
+      try { await renameTabServer(current.id, label.trim()); } catch(e){ console.error(e); }
       setTabs(t=> t.map((tb,i)=> i===idx ? { ...tb, title: label.trim() } : tb));
     }
   },[tabs]);
 
   // Persist tabs & active to localStorage (debounced minimal)
   useEffect(()=>{
-    if(forceShared) return; // not needed in shared
-    if(firstLoadRef.current){
-      // skip first run if loaded from storage (already same value)
-      firstLoadRef.current = false;
-      return;
-    }
-    saveTabs(tabs, active);
-  },[tabs, active, forceShared]);
+    if(forceShared) return;
+    (async ()=>{
+      setLoading(true);
+      try {
+        const serverTabs = await fetchTabs();
+        setTabs(serverTabs);
+        setActive(0);
+      } catch(e){ console.error(e); }
+      setLoading(false);
+    })();
+  },[forceShared]);
 
-  const resetAll = useCallback(()=>{
-    if(!confirm('Reset all tabs? This will create a fresh single tab.')) return;
-    setTabs([{ id: genSessionId(1), title: 'Tab 1' }]);
-    setActive(0);
-    try { localStorage.removeItem(LS_KEY); } catch {}
-  },[]);
+  const resetAll = useCallback(async ()=>{
+    if(!confirm('Reset all tabs?')) return;
+    try {
+      // naive: delete each (skip last rule in API by ensuring more than 1 first)
+      for(const t of tabs){
+        try { await deleteTabServer(t.id); } catch {}
+      }
+      const first = await createTab('Tab 1');
+      setTabs([first]);
+      setActive(0);
+    } catch(e){ console.error(e); }
+  },[tabs]);
 
   return (
     <div className="flex flex-col h-screen w-full bg-black">
-      <div className="flex items-stretch bg-gray-900 border-b border-gray-800 overflow-x-auto relative">
+  <div className="flex items-stretch bg-gray-900 border-b border-gray-800 overflow-x-auto relative">
         {!forceShared && (
           <>
             <button onClick={addTab} title="Tambah tab (Alt+T)" className="px-3 py-1 text-xs font-mono text-gray-300 hover:text-white border-r border-gray-800 sticky left-0 bg-gray-900">+ New</button>
@@ -164,6 +157,9 @@ export default function TerminalTabs(){
         )}
       </div>
       <div className="flex-1 min-h-0 relative">
+        {loading && !forceShared && (
+          <div className="absolute inset-0 flex items-center justify-center text-gray-500 text-xs font-mono">Loading tabs...</div>
+        )}
         {tabs.map((tab,i)=> (
           <div key={tab.id} style={{ display: i===active ? 'block':'none'}} className="w-full h-full">
             <Terminal sessionId={tab.id} zen={true} />
@@ -171,7 +167,7 @@ export default function TerminalTabs(){
         ))}
         {!forceShared && (
           <div className="pointer-events-none select-none absolute bottom-1 right-2 text-[10px] text-gray-600 font-mono opacity-70 text-right leading-tight">
-            Alt+T New | Alt+W Close | Alt+1..9 Switch<br/>Persisted tabs (local)
+            Alt+T New | Alt+W Close | Alt+1..9 Switch<br/>Server persisted tabs
           </div>
         )}
       </div>
