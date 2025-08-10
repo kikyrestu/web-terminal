@@ -171,3 +171,23 @@ NEXT_PUBLIC_SOCKET_URL=https://domainkamu.com  # Override base URL socket kalau 
 
 Pastikan untuk mengganti password/hash default sebelum publish publik.
 
+## Otomatisasi Nginx Reverse Proxy
+Gunakan helper script (Debian/Ubuntu):
+```
+sudo bash scripts/nginx-proxy-setup.sh
+```
+Langkah otomatis:
+1. Tanya domain & port internal
+2. Buat server block HTTP + proxy WebSocket
+3. (Opsional) aktifkan gzip
+4. (Opsional) jalankan certbot untuk HTTPS
+5. Cetak ENV yang perlu diset
+
+Set `.env` setelah selesai:
+```
+ALLOWED_ORIGIN=https://domainmu
+NEXT_PUBLIC_SOCKET_URL=https://domainmu
+```
+
+Ulangi script untuk overwrite konfigurasi.
+
