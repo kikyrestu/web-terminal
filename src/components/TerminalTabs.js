@@ -45,47 +45,35 @@ export default function TerminalTabs(){
   const [active,setActive] = useState(0);
   const [loading,setLoading] = useState(!forceShared);
 
-  // Keyboard shortcuts (avoid browser reserved combos):
-  //  Alt+T  -> new tab
-  //  Alt+W  -> close active tab
-  //  Alt+1..9 -> switch tab
-  useEffect(()=>{
-    if(forceShared) return; // no multi-tab controls in shared mode
-    const handler = (e)=>{
-      if(e.altKey){
-        // New tab
-        if(!e.shiftKey && !e.ctrlKey && (e.key === 't' || e.key === 'T')){ e.preventDefault(); addTab(); return; }
-        // Close tab
-        if(!e.shiftKey && !e.ctrlKey && (e.key === 'w' || e.key === 'W')){ e.preventDefault(); closeTab(active); return; }
-        // Switch tab 1..9
-        if(/^[1-9]$/.test(e.key)){
-          e.preventDefault();
-          const idx = parseInt(e.key,10)-1;
-          setActive(a=> idx < tabs.length ? idx : a);
-          return;
-        }
-      }
-    };
-    window.addEventListener('keydown', handler);
-    return ()=> window.removeEventListener('keydown', handler);
-  },[active, forceShared, tabs, addTab, closeTab]);
-
+  // Actions (define before effects to avoid TDZ issues)
   const addTab = useCallback(async ()=>{
     try {
       const tab = await createTab();
-      setTabs(t=>[...t, tab]);
-      setActive(a=>tabs.length); // new last index
-    } catch(e){ console.error(e); }
-  },[tabs.length]);
+      setTabs(prev => {
+        const next = [...prev, tab];
+        setActive(next.length - 1);
+        return next;
+      });
+    } catch(e){ console.error('[addTab]', e); }
+  },[]);
 
   const closeTab = useCallback(async (idx)=>{
-    setTabs(t=>{ if(t.length===1) return t; return t; }); // optimistic guard
-    const target = tabs[idx];
-    if(!target || tabs.length===1) return;
-    try { await deleteTabServer(target.id); } catch(e){ console.error(e); }
-    setTabs(t=>{
-      const newTabs = t.filter((_,i)=>i!==idx);
-      setActive(a=>{
+    setTabs(prev => {
+      if(prev.length === 1) return prev; // cannot remove last
+      return prev; // placeholder so we still have latest closure when async returns
+    });
+    let targetId;
+    setTabs(prev => {
+      if(prev.length === 1) return prev;
+      const target = prev[idx];
+      targetId = target ? target.id : undefined;
+      return prev;
+    });
+    if(!targetId) return;
+    try { await deleteTabServer(targetId); } catch(e){ console.error('[closeTab] delete failed', e); }
+    setTabs(prev => {
+      const newTabs = prev.filter((_,i)=> i!==idx);
+      setActive(a => {
         if(a === idx) return Math.max(0, idx -1);
         if(a > idx) return a -1;
         if(a >= newTabs.length) return newTabs.length -1;
@@ -93,17 +81,38 @@ export default function TerminalTabs(){
       });
       return newTabs;
     });
-  },[tabs]);
+  },[]);
 
   const renameTab = useCallback(async (idx)=>{
-    const current = tabs[idx];
+    setTabs(prev => prev); // force capture latest
+    let current;
+    setTabs(prev => { current = prev[idx]; return prev; });
     if(!current) return;
     const label = prompt('Tab name:', current.title);
     if(label && label.trim()){
-      try { await renameTabServer(current.id, label.trim()); } catch(e){ console.error(e); }
-      setTabs(t=> t.map((tb,i)=> i===idx ? { ...tb, title: label.trim() } : tb));
+      const newTitle = label.trim();
+      try { await renameTabServer(current.id, newTitle); } catch(e){ console.error('[renameTab] server rename failed', e); }
+      setTabs(prev => prev.map((tb,i)=> i===idx ? { ...tb, title: newTitle } : tb));
     }
-  },[tabs]);
+  },[]);
+
+  // Keyboard shortcuts (avoid browser reserved combos): Alt+T new, Alt+W close, Alt+1..9 switch
+  useEffect(()=>{
+    if(forceShared) return;
+    const handler = (e)=>{
+      if(!e.altKey || e.shiftKey || e.ctrlKey) return;
+      const k = e.key.toLowerCase();
+      if(k === 't'){ e.preventDefault(); addTab(); return; }
+      if(k === 'w'){ e.preventDefault(); closeTab(active); return; }
+      if(/^[1-9]$/.test(k)){
+        e.preventDefault();
+        const idx = parseInt(k,10)-1;
+        setActive(a=> idx < tabs.length ? idx : a);
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return ()=> window.removeEventListener('keydown', handler);
+  },[forceShared, active, tabs.length, addTab, closeTab]);
 
   // Persist tabs & active to localStorage (debounced minimal)
   useEffect(()=>{
