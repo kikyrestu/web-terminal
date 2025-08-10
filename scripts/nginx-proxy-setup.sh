@@ -30,29 +30,33 @@ SITE_FILE="/etc/nginx/sites-available/${DOMAIN}.conf"
 ENABLED_LINK="/etc/nginx/sites-enabled/${DOMAIN}.conf"
 
 echo "[INFO] Membuat konfigurasi Nginx: $SITE_FILE"
-cat > "$SITE_FILE" <<EOF
+cat > "$SITE_FILE" <<'EOF'
 server {
   listen 80;
-  server_name ${DOMAIN};
-  # Setelah sertifikat aktif, certbot akan tambahkan blok redirect otomatis.
+  server_name DOMAIN_PLACEHOLDER;
+  # Setelah sertifikat & redirect HTTPS aktif, blok ini bisa diubah menjadi redirect 301.
 
   location /socket.io/ {
-     proxy_pass http://127.0.0.1:${PORT};
-     proxy_http_version 1.1;
-     proxy_set_header Upgrade $http_upgrade;
-     proxy_set_header Connection "upgrade";
-     proxy_set_header Host $host;
-     proxy_read_timeout 600s;
+    proxy_pass http://127.0.0.1:PORT_PLACEHOLDER;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+    proxy_set_header Host $host;
+    proxy_read_timeout 600s;
   }
 
   location / {
-     proxy_pass http://127.0.0.1:${PORT};
-     proxy_set_header Host $host;
-     proxy_set_header X-Forwarded-For $remote_addr;
-     proxy_set_header X-Forwarded-Proto http;
+    proxy_pass http://127.0.0.1:PORT_PLACEHOLDER;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-For $remote_addr;
+    proxy_set_header X-Forwarded-Proto $scheme;
   }
 }
 EOF
+
+# Ganti placeholder
+sed -i "s/DOMAIN_PLACEHOLDER/${DOMAIN}/g" "$SITE_FILE"
+sed -i "s/PORT_PLACEHOLDER/${PORT}/g" "$SITE_FILE"
 
 ln -sf "$SITE_FILE" "$ENABLED_LINK"
 
@@ -77,8 +81,8 @@ fi
 
 if [[ $SSL =~ ^[Yy] ]]; then
   command -v certbot >/dev/null || { echo "[INFO] Install certbot"; apt install -y certbot python3-certbot-nginx; }
-  echo "[INFO] Menjalankan certbot untuk domain ${DOMAIN}"
-  certbot --nginx -d "$DOMAIN" --agree-tos --no-eff-email -m admin@${DOMAIN#*.} || echo "[WARN] Certbot gagal, kamu bisa ulangi manual." 
+  echo "[INFO] Menjalankan certbot untuk domain ${DOMAIN} (mode non-interaktif sederhana)"
+  certbot --nginx -d "$DOMAIN" --agree-tos --redirect --no-eff-email -m admin@${DOMAIN#*.} || echo "[WARN] Certbot gagal, kamu bisa ulangi manual: certbot --nginx -d $DOMAIN" 
 fi
 
 echo "\n=== Selesai ==="

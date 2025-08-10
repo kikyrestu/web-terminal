@@ -64,7 +64,8 @@ echo "[INFO] Tulis konfigurasi .env"
     echo "AUTH_PASS_PLAIN=$ADMIN_PASS"
   fi
   if [[ -n "$DOMAIN" ]]; then
-    echo "ALLOWED_ORIGIN=https://$DOMAIN"
+    # Izinkan sementara http & https saat belum pasang SSL
+    echo "ALLOWED_ORIGIN=https://$DOMAIN,http://$DOMAIN"
     echo "NEXT_PUBLIC_SOCKET_URL=https://$DOMAIN"
   else
     echo "ALLOWED_ORIGIN=*"
