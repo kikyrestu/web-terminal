@@ -207,3 +207,13 @@ Script akan:
 
 Ulangi script untuk re-konfigurasi (backup `.env` lama otomatis).
 
+## Multi-Tab Terminal
+
+Sekarang mendukung multi-tab (beberapa PTY independen) di halaman utama:
+- Tombol + New untuk tambah tab
+- Ctrl+Shift+T buat tab baru
+- Ctrl+W tutup tab aktif (minimal 1 tab akan tersisa)
+- Double click nama tab untuk rename
+
+Mode shared (`NEXT_PUBLIC_FORCE_SHARED_SESSION=1`) akan menonaktifkan multi-tab dan semua user berbagi satu PTY.
+

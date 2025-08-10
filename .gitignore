@@ -44,3 +44,7 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 terminal-history/
+.latest_bcrypt_hash
+gen-hash.mjs
+gen-sync-hash.cjs
+scripts/gen-bcrypt-hash.mjs

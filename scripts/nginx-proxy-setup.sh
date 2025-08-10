@@ -29,7 +29,19 @@ SSL=${SSL:-Y}
 SITE_FILE="/etc/nginx/sites-available/${DOMAIN}.conf"
 ENABLED_LINK="/etc/nginx/sites-enabled/${DOMAIN}.conf"
 
-echo "[INFO] Membuat konfigurasi Nginx: $SITE_FILE"
+if [[ -f "$SITE_FILE" ]]; then
+  echo "[INFO] Konfigurasi lama ditemukan: $SITE_FILE"
+  read -rp "Backup & overwrite? (Y/n): " OVER
+  OVER=${OVER:-Y}
+  if [[ ! $OVER =~ ^[Yy]$ ]]; then
+    echo "[ABORT] Tidak menimpa config. Keluar."; exit 0
+  fi
+  BK="$SITE_FILE.bak.$(date +%s)"
+  cp "$SITE_FILE" "$BK"
+  echo "[INFO] Backup disimpan: $BK"
+fi
+
+echo "[INFO] Menulis konfigurasi Nginx baru: $SITE_FILE"
 cat > "$SITE_FILE" <<'EOF'
 server {
   listen 80;
@@ -80,9 +92,22 @@ if [[ $GZIP =~ ^[Yy] ]]; then
 fi
 
 if [[ $SSL =~ ^[Yy] ]]; then
-  command -v certbot >/dev/null || { echo "[INFO] Install certbot"; apt install -y certbot python3-certbot-nginx; }
-  echo "[INFO] Menjalankan certbot untuk domain ${DOMAIN} (mode non-interaktif sederhana)"
-  certbot --nginx -d "$DOMAIN" --agree-tos --redirect --no-eff-email -m admin@${DOMAIN#*.} || echo "[WARN] Certbot gagal, kamu bisa ulangi manual: certbot --nginx -d $DOMAIN" 
+  CERT_DIR="/etc/letsencrypt/live/${DOMAIN}"
+  if [[ -d "$CERT_DIR" && -f "$CERT_DIR/fullchain.pem" ]]; then
+    echo "[INFO] Sertifikat sudah ada: $CERT_DIR"
+    read -rp "Renew / reconfigure certbot sekarang? (y/N): " RENEW
+    if [[ $RENEW =~ ^[Yy]$ ]]; then
+      command -v certbot >/dev/null || { echo "[INFO] Install certbot"; apt install -y certbot python3-certbot-nginx; }
+      certbot renew --nginx --dry-run || true
+      certbot --nginx -d "$DOMAIN" --agree-tos --redirect --no-eff-email -m admin@${DOMAIN#*.} || echo "[WARN] Certbot re-run gagal." 
+    else
+      echo "[INFO] Lewati certbot (sertifikat sudah ada)."
+    fi
+  else
+    command -v certbot >/dev/null || { echo "[INFO] Install certbot"; apt install -y certbot python3-certbot-nginx; }
+    echo "[INFO] Menjalankan certbot pertama kali untuk domain ${DOMAIN}"
+    certbot --nginx -d "$DOMAIN" --agree-tos --redirect --no-eff-email -m admin@${DOMAIN#*.} || echo "[WARN] Certbot gagal, jalankan manual: certbot --nginx -d $DOMAIN" 
+  fi
 fi
 
 echo "\n=== Selesai ==="
