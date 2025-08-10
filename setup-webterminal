@@ -108,8 +108,8 @@ if [[ $START_PM2 =~ ^[Yy] ]]; then
     fi
   fi
   if command -v pm2 >/dev/null 2>&1; then
-    echo "[INFO] Menjalankan pm2 start server.js --name web-terminal"
-    NODE_ENV=production pm2 start server.js --name web-terminal --update-env
+  echo "[INFO] Menjalankan pm2 start server.js --name web-terminal (PORT=$PORT)"
+  PORT=$PORT NODE_ENV=production pm2 start server.js --name web-terminal --update-env
     pm2 save || true
   else
     echo "[WARN] pm2 tidak tersedia, jalankan manual: NODE_ENV=production node server.js"

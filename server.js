@@ -2,6 +2,32 @@ import { createServer } from 'http';
 import fs from 'fs';
 import path from 'path';
 
+// Early load .env (simple parser) so PORT / AUTH_* / etc apply even without process manager env injection
+(() => {
+  try {
+    const envFile = path.join(process.cwd(), '.env');
+    if (fs.existsSync(envFile)) {
+      const raw = fs.readFileSync(envFile, 'utf8');
+      raw.split(/\r?\n/).forEach(line => {
+        if (!line || line.startsWith('#')) return;
+        const eq = line.indexOf('=');
+        if (eq === -1) return;
+        const key = line.slice(0, eq).trim();
+        if (!key) return;
+        const val = line.slice(eq + 1).trim();
+        if (process.env[key] === undefined) {
+          process.env[key] = val;
+        }
+      });
+      if (process.env.DEBUG_ENV_LOAD === '1') {
+        console.log('[ENV] Loaded .env file');
+      }
+    }
+  } catch (e) {
+    console.error('[ENV] Failed loading .env', e.message);
+  }
+})();
+
 // If DEBUG_AUTH and no .env file but .env.example exists, attempt to load key lines (for local debug only)
 if(process.env.DEBUG_AUTH === '1'){
   const envPath = path.join(process.cwd(), '.env');
@@ -43,7 +69,8 @@ const __dirname = dirname(__filename);
 import * as historyManager from './terminal-history-manager.js';
 
 const dev = process.env.NODE_ENV !== 'production';
-const port = process.env.PORT || 3001; // Changed to port 3001 as default
+const port = process.env.PORT || 3001; // Default port (can be overridden in .env)
+const host = process.env.HOST || '0.0.0.0'; // Bind to all interfaces by default for public access
 
 // Early auth / CORS debug (before Next prepares) when DEBUG_AUTH=1
 if (process.env.DEBUG_AUTH === '1') {
@@ -92,14 +119,26 @@ app.prepare().then(() => {
   });
   
   // Initialize Socket.IO server
-  const allowedOrigin = process.env.ALLOWED_ORIGIN || '*';
+  // Support multiple origins: ALLOWED_ORIGIN can be comma-separated list
+  const allowedOriginValue = process.env.ALLOWED_ORIGIN || '*';
+  let allowedOrigins = allowedOriginValue.split(',').map(o => o.trim()).filter(Boolean);
+  if (allowedOrigins.length === 0) allowedOrigins = ['*'];
+
+  const corsConfig = {
+    origin: (origin, cb) => {
+      if (!origin) return cb(null, true); // Allow non-browser (server-to-server) or same-origin (no Origin header)
+      if (allowedOrigins.includes('*') || allowedOrigins.includes(origin)) {
+        return cb(null, true);
+      }
+      return cb(new Error('Origin not allowed: ' + origin));
+    },
+    methods: ['GET', 'POST'],
+    credentials: true
+  };
+
   const io = new Server(server, {
     path: '/socket.io',
-    cors: {
-      origin: allowedOrigin,
-      methods: ['GET', 'POST'],
-      credentials: true
-    },
+    cors: corsConfig,
     transports: ['websocket', 'polling']
   });
   
@@ -339,7 +378,10 @@ app.prepare().then(() => {
   });
   
   // Start the server
-  server.listen(port, () => {
-    console.log(`Server running at http://localhost:${port}/`);
+  server.listen(port, host, () => {
+    console.log(`Server running at http://${host === '0.0.0.0' ? '0.0.0.0' : host}:${port}/`);
+    if (host === '0.0.0.0') {
+      console.log('Accessible via any interface (public if firewall/network allows).');
+    }
   });
 });
