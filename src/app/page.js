@@ -1,103 +1,57 @@
-import Image from "next/image";
+'use client';
+
+import dynamic from 'next/dynamic';
+import React, { useState, useEffect, useCallback } from 'react';
+
+// Dynamic import tabs wrapper
+const TerminalTabs = dynamic(() => import('@/components/TerminalTabs'), { ssr:false });
 
 export default function Home() {
-  return (
-    <div className="font-sans grid grid-rows-[20px_1fr_20px] items-center justify-items-center min-h-screen p-8 pb-20 gap-16 sm:p-20">
-      <main className="flex flex-col gap-[32px] row-start-2 items-center sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={180}
-          height={38}
-          priority
-        />
-        <ol className="font-mono list-inside list-decimal text-sm/6 text-center sm:text-left">
-          <li className="mb-2 tracking-[-.01em]">
-            Get started by editing{" "}
-            <code className="bg-black/[.05] dark:bg-white/[.06] font-mono font-semibold px-1 py-0.5 rounded">
-              src/app/page.js
-            </code>
-            .
-          </li>
-          <li className="tracking-[-.01em]">
-            Save and see your changes instantly.
-          </li>
-        </ol>
+  const [zen, setZen] = useState(false);
+  const [user,setUser]=useState(null);
+  const toggleZen = useCallback(() => setZen(z => !z), []);
+  const [auth,setAuth]=useState(null); // null = checking, true = ok, false = redirect
+  useEffect(()=>{ (async ()=>{
+    try {
+      const r = await fetch('/api/me',{cache:'no-store'});
+  if(r.ok){ const j=await r.json(); setUser(j.user); setAuth(true); } else { setAuth(false); window.location.href='/login'; }
+    } catch { setAuth(false); window.location.href='/login'; }
+  })(); },[]);
 
-        <div className="flex gap-4 items-center flex-col sm:flex-row">
-          <a
-            className="rounded-full border border-solid border-transparent transition-colors flex items-center justify-center bg-foreground text-background gap-2 hover:bg-[#383838] dark:hover:bg-[#ccc] font-medium text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 sm:w-auto"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={20}
-              height={20}
-            />
-            Deploy now
-          </a>
-          <a
-            className="rounded-full border border-solid border-black/[.08] dark:border-white/[.145] transition-colors flex items-center justify-center hover:bg-[#f2f2f2] dark:hover:bg-[#1a1a1a] hover:border-transparent font-medium text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 w-full sm:w-auto md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Read our docs
-          </a>
+  useEffect(() => {
+    const handler = (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'z') {
+        e.preventDefault();
+        toggleZen();
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [toggleZen]);
+
+  const logout = async () => { try { await fetch('/api/logout',{method:'POST'}); document.cookie='auth=; Max-Age=0; path=/'; window.location.href='/login'; } catch{} };
+
+  return (
+    <div className="font-sans h-screen w-screen bg-black text-white overflow-hidden">
+      <div className="absolute inset-0 flex flex-col">
+        {!zen && auth !== false && (
+          <div className="flex items-center px-3 py-2 text-xs bg-gray-900 border-b border-gray-800 gap-4 select-none">
+            <span className="font-semibold">Web Terminal</span>
+            <span className="text-gray-500 hidden sm:inline">Multi-session persistent shell</span>
+            <div className="ml-auto flex items-center gap-3 text-gray-500">
+              <span className="hidden md:inline">Ctrl+Shift+Z toggle zen</span>
+              <button onClick={logout} className="px-2 py-0.5 rounded bg-red-600 hover:bg-red-500 text-white">Logout</button>
+              <button onClick={toggleZen} className="px-2 py-0.5 rounded bg-gray-800 hover:bg-gray-700 text-gray-300">Zen</button>
+            </div>
+          </div>
+        )}
+        <div className="flex-grow relative">
+          {auth === null && (
+            <div className="w-full h-full flex items-center justify-center text-xs text-gray-400">Checking auth...</div>
+          )}
+          {auth === true && <TerminalTabs zen={zen} user={user} />}
         </div>
-      </main>
-      <footer className="row-start-3 flex gap-[24px] flex-wrap items-center justify-center">
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/file.svg"
-            alt="File icon"
-            width={16}
-            height={16}
-          />
-          Learn
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/window.svg"
-            alt="Window icon"
-            width={16}
-            height={16}
-          />
-          Examples
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/globe.svg"
-            alt="Globe icon"
-            width={16}
-            height={16}
-          />
-          Go to nextjs.org →
-        </a>
-      </footer>
+      </div>
     </div>
   );
 }

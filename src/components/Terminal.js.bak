@@ -1,0 +1,521 @@
+'use client';
+
+import React, { useEffect, useRef, useState } from 'react';
+import { Terminal as XTerm } from '@xterm/xterm';
+import { FitAddon } from '@xterm/addon-fit';
+import { WebLinksAddon } from '@xterm/addon-web-links';
+import { io } from 'socket.io-client';
+import '@xterm/xterm/css/xterm.css';
+
+export default function Terminal() {
+  const terminalRef = useRef(null);
+  const terminalInitialized = useRef(false);
+  const [terminal, setTerminal] = useState(null);
+  const [socket, setSocket] = useState(null);
+  const [sessionId, setSessionId] = useState(null);
+  const [isConnected, setIsConnected] = useState(false);
+
+  // First effect: Setup socket and session
+  useEffect(() => {
+    // Generate a unique session ID or retrieve from localStorage
+    const storedSessionId = localStorage.getItem('terminalSessionId');
+    const newSessionId = storedSessionId || `session-${Date.now()}`;
+    
+    if (!storedSessionId) {
+      localStorage.setItem('terminalSessionId', newSessionId);
+    }
+    
+    setSessionId(newSessionId);
+
+    // Initialize Socket.IO
+    const socketInit = async () => {
+      try {
+        // Connect to Socket.IO server
+        const socketInstance = io({
+          path: '/socket.io',
+          transports: ['websocket', 'polling'],
+          reconnectionAttempts: 5,
+          reconnectionDelay: 1000,
+          autoConnect: true
+        });
+        
+        socketInstance.on('connect', () => {
+          console.log('Socket connected', socketInstance.id);
+          setIsConnected(true);
+          
+          // Join session or create new one
+          socketInstance.emit('join-session', newSessionId);
+        });
+        
+        socketInstance.on('disconnect', () => {
+          console.log('Socket disconnected');
+          setIsConnected(false);
+        });
+        
+        socketInstance.on('connect_error', (err) => {
+          console.error('Socket connection error:', err);
+          setIsConnected(false);
+        });
+        
+        setSocket(socketInstance);
+      } catch (error) {
+        console.error('Failed to initialize socket:', error);
+      }
+    };
+    
+    socketInit();
+
+    // Cleanup function for socket
+    return () => {
+      // Socket cleanup will happen in separate cleanup functions
+    };
+  }, []);
+
+  // Second effect: Initialize terminal
+  useEffect(() => {
+    // Skip if the terminal is already initialized or ref is not ready
+    if (!terminalRef.current || terminalInitialized.current) return;
+    
+    console.log('Initializing terminal');
+    terminalInitialized.current = true;
+    
+    try {
+      // Initialize terminal with more visible cursor style
+      const term = new XTerm({
+        cursorBlink: true,
+        theme: {
+          background: '#000000',
+          foreground: '#FFFFFF',
+          cursor: '#00FF00', // Bright green cursor
+          cursorAccent: '#000000',
+          selectionBackground: 'rgba(255, 255, 255, 0.3)',
+        },
+        scrollback: 5000,
+        fontFamily: 'monospace',
+        fontSize: 14,
+        allowTransparency: false,
+        cursorStyle: 'block', // Use a block cursor for better visibility
+      });
+
+      const fitAddon = new FitAddon();
+      const webLinksAddon = new WebLinksAddon();
+
+      term.loadAddon(fitAddon);
+      term.loadAddon(webLinksAddon);
+
+      term.open(terminalRef.current);
+      
+      // Menunda pemanggilan fit() dan fokus untuk memastikan terminal sudah terinisialisasi sepenuhnya
+      setTimeout(() => {
+        try {
+          // Pastikan terminal masih memiliki elemen yang valid
+          if (term.element && term.element.isConnected) {
+            // Fit terminal to container
+            fitAddon.fit();
+            
+            // Fokus terminal dan log ukurannya untuk debugging
+            term.focus();
+            console.log('Terminal focused and fitted: ', {
+              cols: term.cols, 
+              rows: term.rows,
+              dimensions: terminalRef.current ? terminalRef.current.getBoundingClientRect() : null
+            });
+          } else {
+            console.warn('Terminal element not connected to DOM during fit operation');
+          }
+        } catch (e) {
+          console.error('Error during terminal fit/focus:', e);
+        }
+      }, 300); // Increased timeout to ensure terminal is fully initialized
+      
+      // Store terminal reference
+      setTerminal(term);
+
+      // Handle window resize
+      const handleResize = () => {
+        if (fitAddon && term.element) {
+          try {
+            // Pastikan terminal masih terpasang ke DOM
+            if (!term.element.isConnected) {
+              console.log('Terminal no longer connected to DOM, skipping resize');
+              return;
+            }
+            
+            fitAddon.fit();
+            
+            // Pastikan terminal memiliki dimensi yang valid sebelum mengirimnya
+            if (term.cols && term.rows && socket && socket.connected) {
+              const dimensions = { cols: term.cols, rows: term.rows };
+              socket.emit('resize', dimensions);
+              console.log('Terminal resized:', dimensions);
+            }
+          } catch (e) {
+            console.error('Error resizing terminal:', e);
+          }
+        }
+      };
+
+      window.addEventListener('resize', handleResize);
+      
+      // Cleanup function for terminal
+      return () => {
+        console.log('Cleaning up terminal');
+        window.removeEventListener('resize', handleResize);
+        
+        if (term) {
+          try {
+            term.dispose();
+          } catch (err) {
+            console.error('Error disposing terminal:', err);
+          }
+        }
+        
+        terminalInitialized.current = false;
+      };
+    } catch (err) {
+      console.error('Error creating terminal:', err);
+      terminalInitialized.current = false;
+    }
+  }, [terminalRef, socket]);
+
+  // Third effect: Connect socket and terminal for data flow
+  useEffect(() => {
+    if (!socket || !terminal || !sessionId) return;
+
+    console.log('Setting up terminal data handlers');
+    
+    // Handle data from server
+    const handleOutput = (data) => {
+      if (!terminal || !terminal.element || !terminal.element.isConnected) {
+        console.warn('Terminal not ready to receive output');
+        return;
+      }
+      
+      console.log('Received output:', data);
+      
+      // Cek apakah ini adalah prompt shell yang baru
+      const isNewPrompt = data.includes('┌──(') && data.includes('└─$');
+      const isClearCommand = data.trim() === '\x1b[H\x1b[2J' || data.trim() === '\x1B[H\x1B[J';
+      
+      // Jika perintah clear, kita bersihkan terminal
+      if (isClearCommand) {
+        terminal.clear();
+      }
+      
+      try {
+        // Tulis output ke terminal
+        terminal.write(data);
+        
+        // Focus terminal setelah menerima data untuk memastikan input keyboard berfungsi
+        setTimeout(() => terminal.focus(), 10);
+        
+        // Simpan konten terminal hanya jika ini adalah output perintah (bukan prompt)
+        // dan hanya jika output cukup panjang (untuk menghindari menyimpan prompt kosong)
+        if (!isNewPrompt && !isClearCommand && data.length > 5) {
+          // Save all terminal content to localStorage periodically
+          // Instead of trying to capture all output, we just save current visible buffer
+          const saveOutputToStorage = () => {
+            try {
+              const lines = [];
+              for (let i = 0; i < terminal.buffer.active.length; i++) {
+                const line = terminal.buffer.active.getLine(i);
+                if (line) {
+                  lines.push(line.translateToString());
+                }
+              }
+              
+              const history = {
+                output: lines.join('\r\n'),
+                timestamp: Date.now()
+              };
+              
+              localStorage.setItem(`terminal-history-${sessionId}`, JSON.stringify(history));
+            } catch (e) {
+              console.error('Failed to save terminal history', e);
+            }
+          };
+          
+          // Save output after receiving data, throttled to avoid excessive writes
+          setTimeout(saveOutputToStorage, 500);
+        }
+      } catch (err) {
+        console.error('Error handling output:', err);
+      }
+    };
+          // Save all terminal content to localStorage periodically
+          // Instead of trying to capture all output, we just save current visible buffer
+          const saveOutputToStorage = () => {
+            try {
+              const lines = [];
+              for (let i = 0; i < terminal.buffer.active.length; i++) {
+                const line = terminal.buffer.active.getLine(i);
+                if (line) {
+                  lines.push(line.translateToString());
+                }
+              }
+              
+              const history = {
+                output: lines.join('\r\n'),
+                timestamp: Date.now()
+              };
+              
+              localStorage.setItem(`terminal-history-${sessionId}`, JSON.stringify(history));
+            } catch (e) {
+              console.error('Failed to save terminal history', e);
+            }
+          };
+          
+          // Save output after receiving data, throttled to avoid excessive writes
+          setTimeout(saveOutputToStorage, 500);
+        }
+      } catch (err) {
+        console.error('Error handling output:', err);
+      }
+    };
+        // Save all terminal content to localStorage periodically
+        // Instead of trying to capture all output, we just save current visible buffer
+        const saveOutputToStorage = () => {
+          try {
+            const lines = [];
+            for (let i = 0; i < terminal.buffer.active.length; i++) {
+              const line = terminal.buffer.active.getLine(i);
+              if (line) {
+                lines.push(line.translateToString());
+              }
+            }
+            
+            const history = {
+              output: lines.join('\r\n'),
+              timestamp: Date.now()
+            };
+            
+            localStorage.setItem(`terminal-history-${sessionId}`, JSON.stringify(history));
+          } catch (e) {
+            console.error('Failed to save terminal history', e);
+          }
+        };
+        
+        // Save output after receiving data, throttled to avoid excessive writes
+        setTimeout(saveOutputToStorage, 500);
+      }
+    };
+
+    // Additional connected event
+    const handleConnected = (message) => {
+      // TIDAK menulis pesan welcome tambahan, karena sudah dikirim dari server
+      // Ini menghindari duplikasi
+      
+      // Auto focus terminal
+      terminal.focus();
+    };
+
+    // Load history from localStorage - DINONAKTIFKAN SEMENTARA
+    // Karena menyebabkan duplikasi output
+    /*
+    const history = localStorage.getItem(`terminal-history-${sessionId}`);
+    if (history) {
+      try {
+        const historyData = JSON.parse(history);
+        
+        // Wait a bit before writing history to ensure terminal is ready
+        setTimeout(() => {
+          terminal.write(historyData.output || '');
+          terminal.write('\r\n'); // Add an extra line break for better spacing
+          terminal.focus(); // Focus after history is loaded
+        }, 200);
+      } catch (e) {
+        console.error('Failed to parse terminal history', e);
+      }
+    }
+    */
+
+    socket.on('output', handleOutput);
+    socket.on('connected', handleConnected);
+
+    // Listen for user input with better logging
+    const dataHandler = (data) => {
+      const charCode = data.charCodeAt(0);
+      const char = JSON.stringify(data);
+      console.log(`Sending input to server: ${char}, charCode: ${charCode}`);
+      
+      if (socket && socket.connected) {
+        // Kirim input ke server
+        socket.emit('input', data);
+        
+        // Untuk perintah clear, terapkan efeknya di sisi klien juga untuk respons lebih cepat
+        if (data === '\r' && terminal.buffer.active.cursorY > 0) {
+          // Ketika Enter ditekan, pastikan kursor fokus
+          setTimeout(() => terminal.focus(), 10);
+          
+          // Dapatkan baris saat ini untuk memeriksa apakah ini perintah clear
+          const currentLineY = terminal.buffer.active.cursorY;
+          const currentLine = terminal.buffer.active.getLine(currentLineY);
+          if (currentLine) {
+            const lineContent = currentLine.translateToString().trim();
+            if (lineContent.endsWith('clear')) {
+              // Pre-emptively clear the terminal for instant feedback
+              setTimeout(() => terminal.clear(), 50);
+            }
+          }
+        }
+      } else {
+        console.error('Socket not connected, cannot send input');
+        terminal.write('\r\n\x1b[31mNot connected to server!\x1b[0m\r\n');
+      }
+    };
+    
+    terminal.onData(dataHandler);
+
+    // Handle terminal resize
+    if (socket.connected && terminal.element && terminal.element.isConnected) {
+      try {
+        const dimensions = { cols: terminal.cols, rows: terminal.rows };
+        // Pastikan dimensi valid sebelum mengirimnya
+        if (dimensions.cols > 0 && dimensions.rows > 0) {
+          socket.emit('resize', dimensions);
+          console.log('Initial terminal size set:', dimensions);
+        } else {
+          console.log('Waiting for valid terminal dimensions...');
+          // Coba sekali lagi setelah beberapa saat jika dimensi belum valid
+          setTimeout(() => {
+            if (terminal.cols > 0 && terminal.rows > 0) {
+              socket.emit('resize', { cols: terminal.cols, rows: terminal.rows });
+              console.log('Delayed terminal size set:', { cols: terminal.cols, rows: terminal.rows });
+            }
+          }, 500);
+        }
+      } catch (e) {
+        console.error('Error sending initial terminal size:', e);
+      }
+    }
+
+    return () => {
+      console.log('Cleaning up terminal handlers');
+      socket.off('output', handleOutput);
+      socket.off('connected', handleConnected);
+      // We don't need to remove the onData handler as it's tied to the terminal instance
+      // which will be disposed in the cleanup of the second effect
+    };
+  }, [socket, terminal, sessionId]);
+
+  // Function to focus terminal when clicked
+  const handleTerminalClick = React.useCallback(() => {
+    if (terminal) {
+      terminal.focus();
+      console.log('Terminal clicked and focused via React handler');
+    }
+  }, [terminal]);
+  
+  // Add a function to detect and fix terminal output issues
+  const detectAndFixOutputIssues = React.useCallback(() => {
+    if (!terminal) return;
+    
+    try {
+      // Check if terminal has duplicated prompts (a sign of display issues)
+      let duplicatedPrompts = 0;
+      let lastLine = '';
+      
+      for (let i = 0; i < terminal.buffer.active.length; i++) {
+        const line = terminal.buffer.active.getLine(i);
+        if (!line) continue;
+        
+        const lineContent = line.translateToString();
+        if (lineContent.includes('└─$') && lastLine.includes('└─$')) {
+          duplicatedPrompts++;
+        }
+        lastLine = lineContent;
+      }
+      
+      // If we detect more than 2 consecutive prompts, it's likely a display issue
+      if (duplicatedPrompts > 2) {
+        console.log('Detected terminal display issues, auto-fixing...');
+        // Clear terminal and send a clear command to fix the display
+        terminal.clear();
+        if (socket && socket.connected) {
+          socket.emit('input', 'clear\r');
+        }
+        return true;
+      }
+      
+      return false;
+    } catch (e) {
+      console.error('Error checking terminal output:', e);
+      return false;
+    }
+  }, [terminal, socket]);
+  
+  // Add periodic check for terminal issues (run every 10 seconds)
+  useEffect(() => {
+    if (!terminal || !socket || !isConnected) return;
+    
+    const intervalId = setInterval(() => {
+      detectAndFixOutputIssues();
+    }, 10000);
+    
+    return () => clearInterval(intervalId);
+  }, [terminal, socket, isConnected, detectAndFixOutputIssues]);
+
+  // Function to reset terminal
+  const handleResetTerminal = React.useCallback(() => {
+    if (terminal && socket && socket.connected) {
+      console.log('Resetting terminal...');
+      
+      // Bersihkan terminal di sisi klien terlebih dahulu
+      terminal.clear();
+      
+      // Kirim perintah clear ke server
+      socket.emit('input', 'clear\r');
+      
+      // Simpan pesan singkat ke localStorage untuk menunjukkan terminal di-reset
+      try {
+        const resetMessage = {
+          output: '*** Terminal has been reset ***\r\n',
+          timestamp: Date.now()
+        };
+        localStorage.setItem(`terminal-history-${sessionId}`, JSON.stringify(resetMessage));
+        
+        // Fokus terminal setelah reset
+        setTimeout(() => terminal.focus(), 100);
+      } catch (e) {
+        console.error('Failed to save reset message:', e);
+      }
+    }
+  }, [socket, sessionId, terminal]);
+
+  return (
+    <div className="flex flex-col w-full h-full">
+      <div className="p-2 bg-gray-800 text-white text-sm font-mono flex items-center justify-between">
+        <span>Web Terminal</span>
+        <div className="flex items-center">
+          <span className={`inline-block w-2 h-2 rounded-full mr-2 ${isConnected ? 'bg-green-500' : 'bg-red-500'}`}></span>
+          <span>{isConnected ? 'Connected' : 'Disconnected'}</span>
+          <span className="ml-4 text-gray-400">Session: {sessionId}</span>
+          <button 
+            className="ml-4 px-2 py-1 bg-gray-700 hover:bg-gray-600 rounded text-xs"
+            onClick={handleResetTerminal}
+          >
+            Reset Terminal
+          </button>
+        </div>
+      </div>
+      <div 
+        ref={terminalRef} 
+        className="flex-grow p-2 bg-black overflow-hidden cursor-text"
+        style={{ 
+          height: 'calc(100% - 40px)', 
+          width: '100%', 
+          position: 'relative',
+          border: '1px solid #333' 
+        }} 
+        onClick={handleTerminalClick}
+        tabIndex="0"
+      >
+        {!isConnected && (
+          <div className="absolute inset-0 flex items-center justify-center bg-black bg-opacity-80 z-10">
+            <div className="text-white">Connecting to terminal...</div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}

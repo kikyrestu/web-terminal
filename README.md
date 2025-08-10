@@ -1,36 +1,172 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://github.com/vercel/next.js/tree/canary/packages/create-next-app).
+# Web Terminal
 
-## Getting Started
+Aplikasi terminal web interaktif dengan fitur persistensi sesi dan kompatibilitas multi-platform.
 
-First, run the development server:
+## Fitur
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+- Terminal interaktif berbasis browser (xterm.js + node-pty)
+- Persistensi output terminal (reload & pindah device)
+- Session nempel ke user (per-user deterministic session) – semua browser user sama join PTY sama
+- Opsi shared global session via env flags
+- Hard clear (command `clear` hapus buffer + file)
+- Auth via ENV (bcrypt hash / plain dev)
+- Unlimited history mode + in-memory rolling buffer
+
+## Teknologi yang Digunakan
+
+- Next.js 15
+- React 19
+- Socket.IO untuk komunikasi real-time
+- node-pty untuk emulasi terminal
+- xterm.js untuk UI terminal
+- Tailwind CSS untuk styling
+
+## Cara Menggunakan
+
+1. Clone repositori
+2. Install dependensi:
+   ```
+   npm install
+   ```
+3. Jalankan aplikasi:
+   ```
+   npm run dev
+   ```
+4. Buka browser di http://localhost:3000
+
+Server Socket.IO akan berjalan di port 3001 untuk menangani komunikasi WebSocket.
+
+## Arsitektur
+
+Aplikasi ini terdiri dari dua bagian utama:
+
+1. **Front-end (Browser)**:
+   - Komponen Terminal berbasis xterm.js
+   - Koneksi Socket.IO ke server
+   - Penanganan input dan output terminal
+   - Penyimpanan output terminal di localStorage untuk persistensi
+
+2. **Back-end (Server)**:
+   - Server Socket.IO terpisah di port 3001
+   - Emulasi terminal menggunakan node-pty
+   - Penanganan koneksi dan sesi terminal
+
+## Persistensi Data
+
+- Server menyimpan raw output ke file per session + buffer in-memory
+- Client tidak wajib localStorage (bisa dimatikan: `NEXT_PUBLIC_DISABLE_LOCAL_CACHE=1`)
+- Session ID per user: `user-<username>-session`
+- Shared mode (semua user/browser satu PTY) jika: `NEXT_PUBLIC_FORCE_SHARED_SESSION=1`
+
+## Pengembangan Lebih Lanjut
+
+Ide lanjutan:
+- Multi-session per user (misal user-admin-session-1..n)
+- RBAC / multiple users table
+- Rate limit input / flood protection
+- Audit log command (append-only)
+- Web SSH passthrough / container attach
+
+## Autentikasi & ENV
+
+Login sekarang memakai ENV:
+
+Wajib set sebelum start (production):
+```
+AUTH_USER=admin
+AUTH_PASS_HASH=$2a$10$YcKuGy0Nm.ZKkDYfA6/m/.6jJwwyN9lWI7UTz0kbXXniZ5iKpV5/m
+```
+Hash di atas adalah contoh untuk sebuah password contoh (jangan pakai di produksi!). Ganti dengan hash password kamu sendiri.
+
+Generate hash baru:
+```
+node -e "import('bcryptjs').then(m=>{const b=m.default||m; b.hash('PasswordBaru',10).then(h=>console.log(h))})"
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Mode dev sementara bisa pakai (jangan di production):
+```
+AUTH_PASS_PLAIN=PasswordBaru
+```
 
-You can start editing the page by modifying `app/page.js`. The page auto-updates as you edit the file.
+## CORS / Origin
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+Batasi asal koneksi WebSocket / API:
+```
+ALLOWED_ORIGIN=https://domainkamu.com
+```
+Gunakan `*` hanya untuk lokal/testing.
 
-## Learn More
+## History / Buffer
 
-To learn more about Next.js, take a look at the following resources:
+```
+TERMINAL_HISTORY_UNLIMITED=1            # simpan semua raw
+TERMINAL_MEMORY_BUFFER_MAX=10485760     # 10MB buffer in-memory (atur sesuai RAM)
+# TERMINAL_HISTORY_MAX_RAW=5242880      # aktif jika unlimited dimatikan
+```
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## File .env contoh
+Lihat `.env.example` dan salin menjadi `.env`.
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## Deployment Cepat (Produksi)
 
-## Deploy on Vercel
+```
+npm install --production
+npm run build
+NODE_ENV=production pm2 start server.js --name webterm
+```
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+Nginx (cuplikan):
+```
+location /socket.io/ {
+   proxy_pass http://127.0.0.1:3001;
+   proxy_http_version 1.1;
+   proxy_set_header Upgrade $http_upgrade;
+   proxy_set_header Connection "upgrade";
+   proxy_set_header Host $host;
+   proxy_read_timeout 600s;
+}
+location / {
+   proxy_pass http://127.0.0.1:3001;
+   proxy_set_header Host $host;
+}
+```
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## Keamanan Minimum
+
+- Ganti hash default
+- Jangan commit `.env`
+- Folder `terminal-history` permission 750, owner user proses
+- Pakai HTTPS (Let’s Encrypt) di reverse proxy
+
+## Hard Clear
+
+Command `clear` sekarang menghapus seluruh history (file + buffer). Reload tidak mengembalikan output lama.
+
+## GitHub / CI
+
+Contoh GitHub Actions (buat `.github/workflows/ci.yml`):
+```yaml
+name: CI
+on: [push, pull_request]
+jobs:
+   build:
+      runs-on: ubuntu-latest
+      steps:
+         - uses: actions/checkout@v4
+         - uses: actions/setup-node@v4
+            with:
+               node-version: 20
+               cache: npm
+         - run: npm ci
+         - run: npm run build
+```
+
+## Variabel Lingkungan Tambahan
+```
+NEXT_PUBLIC_FORCE_SHARED_SESSION=1          # Global single PTY (opsional)
+NEXT_PUBLIC_SHARED_SESSION_ID=main-session  # Nama session global
+NEXT_PUBLIC_DISABLE_LOCAL_CACHE=1           # Matikan cache localStorage
+```
+
+Pastikan untuk mengganti password/hash default sebelum publish publik.
+
