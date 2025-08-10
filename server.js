@@ -376,16 +376,49 @@ app.prepare().then(() => {
         if (session.clients.has(socket.id)) {
           session.clients.delete(socket.id);
           console.log(`Clients remaining in session ${sessionId}: ${session.clients.size}`);
+          if (session.clients.size === 0) {
+            try {
+              session.pty.kill();
+              sessions.delete(sessionId);
+              console.log(`Session ${sessionId} closed (no more clients).`);
+            } catch (e) {
+              console.error('Error closing empty session', e);
+            }
+          }
         }
       }
     });
   });
   
-  // Start the server
-  server.listen(port, host, () => {
-    console.log(`Server running at http://${host === '0.0.0.0' ? '0.0.0.0' : host}:${port}/`);
-    if (host === '0.0.0.0') {
-      console.log('Accessible via any interface (public if firewall/network allows).');
+  // Start the server with optional auto port fallback
+  const wantAuto = process.env.AUTO_PORT === '1';
+  let currentPort = parseInt(port,10);
+  const maxAttempts = 10;
+  let attempt = 0;
+
+  function startListen(){
+    attempt++;
+    server.listen(currentPort, host, () => {
+      console.log(`Server running at http://${host === '0.0.0.0' ? '0.0.0.0' : host}:${currentPort}/`);
+      if (host === '0.0.0.0') {
+        console.log('Accessible via any interface (public if firewall/network allows).');
+      }
+      if (currentPort !== parseInt(port,10)) {
+        console.log(`[PORT] Fallback active. Original port ${port} was busy. Using ${currentPort}.`);
+      }
+    });
+  }
+
+  server.on('error', (err) => {
+    if (err && err.code === 'EADDRINUSE' && wantAuto && attempt < maxAttempts) {
+      console.warn(`[PORT] Port ${currentPort} in use. Trying next port...`);
+      currentPort += 1;
+      setTimeout(startListen, 200);
+    } else {
+      console.error('[SERVER ERROR]', err);
+      process.exit(1);
     }
   });
+
+  startListen();
 });
