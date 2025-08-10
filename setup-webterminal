@@ -26,6 +26,14 @@ while true; do
   echo "[WARN] Password tidak cocok / kosong. Ulangi."
 done
 
+echo "[INFO] Pastikan dependencies terinstall (dibutuhkan bcryptjs)."
+if [[ ! -d node_modules ]]; then
+  echo "[INFO] Menjalankan npm install (full, termasuk dev dependencies untuk build)."
+  npm install
+else
+  echo "[INFO] node_modules sudah ada, skip install awal."
+fi
+
 echo "[INFO] Generate bcrypt hash..."
 set +e
 HASH=$(node -e "import('bcryptjs').then(m=>{const b=m.default||m; b.hash(process.argv[1],10).then(h=>console.log(h))})" "$ADMIN_PASS")
@@ -68,11 +76,17 @@ echo "[INFO] Tulis konfigurasi .env"
 chmod 600 "$ENV_FILE" || true
 echo "[OK] .env dibuat."
 
-echo "[INFO] Install dependencies (npm install --production)"
-npm install --production
+echo "[INFO] Install / update dependencies sebelum build (npm install)"
+npm install
 
 echo "[INFO] Build Next.js (npm run build)"
-npm run build
+npm run build || { echo "[ERROR] Build gagal."; exit 1; }
+
+read -rp "Prune dev dependencies setelah build untuk lebih ringan? (y/N) " PRUNE
+if [[ $PRUNE =~ ^[Yy] ]]; then
+  echo "[INFO] Menghapus dev dependencies (npm prune --omit=dev)"
+  npm prune --omit=dev || echo "[WARN] Prune gagal, lanjut."
+fi
 
 read -rp "Start app sekarang dengan pm2? (Y/n) " START_PM2
 START_PM2=${START_PM2:-Y}
