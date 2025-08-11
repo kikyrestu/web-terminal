@@ -256,23 +256,32 @@ app.prepare().then(() => {
             initialHistorySent: false,
             outputCaptured: false,
             buffer: existingHistory && existingHistory.raw ? existingHistory.raw : '',
-            maxBuffer
+            maxBuffer,
+            closeTimer: null
           });
           const sessionRef = sessions.get(sessionId);
           
           term.onData(data => {
-            io.to(sessionId).emit('output', data);
+            const sref = sessions.get(sessionId);
+            if(!sref) return; // safety
             if (data && data.length > 0) {
-              sessionRef.outputCaptured = true;
-              // Append to in-memory buffer
-              sessionRef.buffer += data;
-              if (sessionRef.buffer.length > sessionRef.maxBuffer) {
-                sessionRef.buffer = sessionRef.buffer.slice(-sessionRef.maxBuffer);
+              sref.outputCaptured = true;
+              // Append to in-memory buffer first
+              sref.buffer += data;
+              if (sref.buffer.length > sref.maxBuffer) {
+                sref.buffer = sref.buffer.slice(-sref.maxBuffer);
               }
-              // Persist async (still using existing manager)
+              // Persist async
               historyManager.appendTerminalOutput(sessionId, data);
-              if (!sessionRef.initialHistorySent) {
-                sendInitialHistory();
+            }
+            const alreadySent = sref.initialHistorySent;
+            if (!alreadySent) {
+              // Kirim initial history (termasuk chunk ini) sekali
+              sendInitialHistory();
+            } else {
+              // Baru stream ke client kalau initial history sudah pernah dikirim
+              if (data && data.length) {
+                io.to(sessionId).emit('output', data);
               }
             }
           });
@@ -311,8 +320,13 @@ app.prepare().then(() => {
           socket.emit('error', { message: 'Failed to create terminal' });
         }
       } else {
-        // Add client to existing session
+        // Add client to existing session (reuse pty so ga dobel banner)
         const existing = sessions.get(sessionId);
+        if (existing.closeTimer) {
+          clearTimeout(existing.closeTimer);
+          existing.closeTimer = null;
+          console.log(`[SESSION] Cancelled pending close for ${sessionId} (client rejoined cepat).`);
+        }
         existing.clients.add(socket.id);
   // Jangan kirim banner apapun agar tidak menambah prompt duplikat
         // Kirim buffer in-memory langsung (instant replay multi-tab)
@@ -434,13 +448,18 @@ app.prepare().then(() => {
           session.clients.delete(socket.id);
           console.log(`Clients remaining in session ${sessionId}: ${session.clients.size}`);
           if (session.clients.size === 0) {
-            try {
-              session.pty.kill();
-              sessions.delete(sessionId);
-              console.log(`Session ${sessionId} closed (no more clients).`);
-            } catch (e) {
-              console.error('Error closing empty session', e);
-            }
+            const grace = parseInt(process.env.SESSION_GRACE_MS || '4000', 10);
+            if (session.closeTimer) clearTimeout(session.closeTimer);
+            session.closeTimer = setTimeout(() => {
+              try {
+                session.pty.kill();
+                sessions.delete(sessionId);
+                console.log(`Session ${sessionId} closed (grace ${grace}ms expired).`);
+              } catch (e) {
+                console.error('Error closing empty session after grace', e);
+              }
+            }, grace);
+            console.log(`Session ${sessionId} akan ditutup kalau gak ada client balik dalam ${grace}ms.`);
           }
         }
       }
