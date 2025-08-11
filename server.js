@@ -124,14 +124,40 @@ app.prepare().then(() => {
       // Log incoming requests for debugging
       console.log(`Request received: ${req.method} ${parsedUrl.pathname}`);
       
-      // Basic security headers
+      // Basic security headers (always safe)
       res.setHeader('X-Frame-Options','DENY');
       res.setHeader('X-Content-Type-Options','nosniff');
       res.setHeader('Referrer-Policy','same-origin');
-      res.setHeader('Cross-Origin-Opener-Policy','same-origin');
-      res.setHeader('Cross-Origin-Resource-Policy','same-origin');
-      res.setHeader('Cross-Origin-Embedder-Policy','require-corp');
       res.setHeader('Permissions-Policy','geolocation=(), microphone=(), camera=()');
+
+      // Determine protocol / trust for COOP/COEP (cross-origin isolation only works on trustworthy origins)
+      const hostHeader = req.headers.host || '';
+      const forwardedProto = (req.headers['x-forwarded-proto'] || '').toString();
+      const directProto = req.socket.encrypted ? 'https' : 'http';
+      const proto = forwardedProto || directProto;
+      const isLoopback = /^(localhost|127\.0\.0\.1)(:\d+)?$/i.test(hostHeader);
+      const proxyTrusted = process.env.PROXY_TRUSTED === '1';
+      const isHttps = proto === 'https';
+      const trustworthy = isHttps || isLoopback; // minimal heuristic
+      const forceIsolation = process.env.FORCE_ISOLATION === '1';
+      const disableIsolation = process.env.DISABLE_ISOLATION === '1';
+
+      if ((trustworthy && !disableIsolation) || forceIsolation) {
+        res.setHeader('Cross-Origin-Opener-Policy','same-origin');
+        res.setHeader('Cross-Origin-Resource-Policy','same-origin');
+        res.setHeader('Cross-Origin-Embedder-Policy','require-corp');
+        if (isHttps) {
+          // 6 months HSTS (only when actually https / or indicated via trusted proxy)
+            res.setHeader('Strict-Transport-Security','max-age=15552000; includeSubDomains');
+        } else if (proxyTrusted && forwardedProto === 'https') {
+            res.setHeader('Strict-Transport-Security','max-age=15552000; includeSubDomains');
+        }
+        if (process.env.DEBUG_SECURITY === '1') {
+          console.log('[SECURITY] Cross-origin isolation headers applied', { host: hostHeader, proto, trustworthy, forceIsolation });
+        }
+      } else if (process.env.DEBUG_SECURITY === '1') {
+        console.log('[SECURITY] Skipping COOP/COEP (untrustworthy origin).', { host: hostHeader, proto, trustworthy, forceIsolation, disableIsolation });
+      }
       // Very light rate limit guard (path based ignore for static chunks)
       const ip = req.socket.remoteAddress || 'unknown';
       if(!parsedUrl.pathname.startsWith('/_next')){
