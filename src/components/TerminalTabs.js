@@ -1,5 +1,5 @@
 "use client";
-import React, { useState, useCallback, useEffect, useRef } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import Terminal from './Terminal';
 
 function genSessionId(idx){
@@ -40,7 +40,6 @@ export default function TerminalTabs(){
   },[]);
   useEffect(()=>{ console.log('[TerminalTabs] forceShared=', forceShared); },[forceShared]);
 
-  const firstLoadRef = useRef(true);
   const [tabs,setTabs] = useState(()=> forceShared ? [{ id: sharedId, title: 'Shared Session', shared:true }] : []);
   const [active,setActive] = useState(0);
   const [loading,setLoading] = useState(!forceShared);
@@ -49,11 +48,8 @@ export default function TerminalTabs(){
   const addTab = useCallback(async ()=>{
     try {
       const tab = await createTab();
-      setTabs(prev => {
-        const next = [...prev, tab];
-        setActive(next.length - 1);
-        return next;
-      });
+      setTabs(prev => [...prev, tab]);
+      if(tab?.id) setActiveId(tab.id);
     } catch(e){ console.error('[addTab]', e); }
   },[]);
 
@@ -71,16 +67,7 @@ export default function TerminalTabs(){
     });
     if(!targetId) return;
     try { await deleteTabServer(targetId); } catch(e){ console.error('[closeTab] delete failed', e); }
-    setTabs(prev => {
-      const newTabs = prev.filter((_,i)=> i!==idx);
-      setActive(a => {
-        if(a === idx) return Math.max(0, idx -1);
-        if(a > idx) return a -1;
-        if(a >= newTabs.length) return newTabs.length -1;
-        return a;
-      });
-      return newTabs;
-    });
+  setTabs(prev => prev.filter((_,i)=> i!==idx));
   },[]);
 
   const renameTab = useCallback(async (idx)=>{
@@ -95,6 +82,19 @@ export default function TerminalTabs(){
       setTabs(prev => prev.map((tb,i)=> i===idx ? { ...tb, title: newTitle } : tb));
     }
   },[]);
+
+  const setActiveId = useCallback(async (id)=>{
+    setActiveIdxFromId(id);
+    try { await fetch('/api/tabs',{method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ action:'set-active', id })}); } catch {}
+  },[]);
+
+  const setActiveIdxFromId = (id)=>{
+    if(!id) return;
+    setActive(prev => {
+      const idx = tabs.findIndex(t=>t.id===id);
+      return idx >=0 ? idx : prev;
+    });
+  };
 
   // Keyboard shortcuts (avoid browser reserved combos): Alt+T new, Alt+W close, Alt+1..9 switch
   useEffect(()=>{
@@ -120,9 +120,15 @@ export default function TerminalTabs(){
     (async ()=>{
       setLoading(true);
       try {
-        const serverTabs = await fetchTabs();
-        setTabs(serverTabs);
-        setActive(0);
+        const res = await fetch('/api/tabs',{cache:'no-store'});
+        const data = await res.json();
+        setTabs(data.tabs || []);
+        if(data.active) {
+          const idx = (data.tabs||[]).findIndex(t=>t.id===data.active);
+          setActive(idx>=0?idx:0);
+        } else {
+          setActive(0);
+        }
       } catch(e){ console.error(e); }
       setLoading(false);
     })();
@@ -132,14 +138,12 @@ export default function TerminalTabs(){
     if(!confirm('Reset all tabs?')) return;
     try {
       // naive: delete each (skip last rule in API by ensuring more than 1 first)
-      for(const t of tabs){
-        try { await deleteTabServer(t.id); } catch {}
-      }
+      for(const t of tabs){ try { await deleteTabServer(t.id); } catch {} }
       const first = await createTab('Tab 1');
       setTabs([first]);
-      setActive(0);
+      if(first?.id) setActiveId(first.id); else setActive(0);
     } catch(e){ console.error(e); }
-  },[tabs]);
+  },[tabs, setActiveId]);
 
   return (
     <div className="flex flex-col h-screen w-full bg-black">
@@ -150,7 +154,7 @@ export default function TerminalTabs(){
             <button onClick={resetAll} title="Reset semua tab" className="px-2 py-1 text-[10px] font-mono text-gray-400 hover:text-red-400 border-r border-gray-800 bg-gray-900">Reset</button>
           </>
         )}
-        {tabs.map((tab,i)=>{
+  {tabs.map((tab,i)=>{
           const activeTab = i===active;
           return (
             <div key={tab.id} className={`flex items-center px-3 py-1 text-xs font-mono cursor-pointer select-none border-r border-gray-800 ${activeTab? 'bg-black text-green-400' : 'text-gray-400 hover:text-white'}`} onClick={()=>setActive(i)} onDoubleClick={()=>renameTab(i)}>

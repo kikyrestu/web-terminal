@@ -95,6 +95,17 @@ const handle = app.getRequestHandler();
 // Store terminal sessions
 const sessions = new Map();
 
+// Simple in-memory rate limit (per IP) for socket connections & API fallback
+const rateMap = new Map(); // key -> {count, ts}
+function rateLimit(key, limit=100, windowMs=60000){
+  const now = Date.now();
+  const rec = rateMap.get(key) || { count:0, ts: now };
+  if(now - rec.ts > windowMs){ rec.count = 0; rec.ts = now; }
+  rec.count++;
+  rateMap.set(key, rec);
+  return rec.count <= limit;
+}
+
 function getDefaultShell() {
   return process.platform === 'win32' ? 'powershell.exe' : process.env.SHELL || 'bash';
 }
@@ -113,6 +124,21 @@ app.prepare().then(() => {
       // Log incoming requests for debugging
       console.log(`Request received: ${req.method} ${parsedUrl.pathname}`);
       
+      // Basic security headers
+      res.setHeader('X-Frame-Options','DENY');
+      res.setHeader('X-Content-Type-Options','nosniff');
+      res.setHeader('Referrer-Policy','same-origin');
+      res.setHeader('Cross-Origin-Opener-Policy','same-origin');
+      res.setHeader('Cross-Origin-Resource-Policy','same-origin');
+      res.setHeader('Cross-Origin-Embedder-Policy','require-corp');
+      res.setHeader('Permissions-Policy','geolocation=(), microphone=(), camera=()');
+      // Very light rate limit guard (path based ignore for static chunks)
+      const ip = req.socket.remoteAddress || 'unknown';
+      if(!parsedUrl.pathname.startsWith('/_next')){
+        if(!rateLimit(ip, 500, 60000)){
+          res.statusCode = 429; res.end('Too Many Requests'); return;
+        }
+      }
       // Let Next.js handle the request
       handle(req, res, parsedUrl);
     } catch (err) {
@@ -149,6 +175,11 @@ app.prepare().then(() => {
   // Handle Socket.IO connections
   io.on('connection', (socket) => {
     console.log('Client connected:', socket.id);
+    const ip = socket.handshake.address || 'unknown';
+    if(!rateLimit('ws:'+ip, 300, 60000)){
+      console.log('WS rate limit exceeded for', ip);
+      socket.disconnect(true); return;
+    }
     // Simple auth check based on cookie set by Next.js login route
     try {
       const cookieHeader = socket.request.headers.cookie || '';
